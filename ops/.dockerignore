@@ -1,0 +1,9 @@
+node_modules
+dist
+server-dist
+test-results
+playwright-report
+.test-postgres
+.env*
+!.env.example
+.git

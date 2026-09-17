@@ -1,0 +1,47 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+server-dist
+test-results
+playwright-report
+coverage
+.vite
+.cache
+*.tsbuildinfo
+*.pid
+*.pid.lock
+.test-postgres
+.test-postgres.log
+backups
+recovery-target
+*.local
+
+# Environment files (the checked-in example is intentionally allowed)
+.env*
+!.env.example
+
+# Local certificates and private keys must be supplied by the deployment environment
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
