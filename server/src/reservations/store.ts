@@ -146,6 +146,7 @@ export interface Availability {
   available: boolean
   deviceStatus: string
   activeBorrowId: string | null
+  activeBorrow: { id: string; borrowedAt: Date; dueAt: Date } | null
   reservations: Reservation[]
 }
 
@@ -169,8 +170,12 @@ export async function getAvailability(
   const device = deviceResult.rows[0]
   if (!device) throw new ReservationError('not_found', 'The device was not found.')
 
-  const borrowResult = await client.query<{ id: string }>(
-    `SELECT id FROM borrow_records
+  const borrowResult = await client.query<{
+    id: string
+    borrowed_at: Date
+    due_at: Date
+  }>(
+    `SELECT id, borrowed_at, due_at FROM borrow_records
      WHERE device_id = $1 AND status = 'active'
        AND borrowed_at < $3 AND due_at > $2
      LIMIT 1`,
@@ -183,7 +188,8 @@ export async function getAvailability(
      ORDER BY start_at, id`,
     [deviceId, rangeStart, rangeEnd],
   )
-  const activeBorrowId = borrowResult.rows[0]?.id ?? null
+  const borrowRow = borrowResult.rows[0]
+  const activeBorrowId = borrowRow?.id ?? null
   return {
     available:
       device.status === 'available' &&
@@ -191,6 +197,13 @@ export async function getAvailability(
       reservationResult.rowCount === 0,
     deviceStatus: device.status,
     activeBorrowId,
+    activeBorrow: borrowRow
+      ? {
+          id: borrowRow.id,
+          borrowedAt: borrowRow.borrowed_at,
+          dueAt: borrowRow.due_at,
+        }
+      : null,
     reservations: reservationResult.rows.map(toReservation),
   }
 }

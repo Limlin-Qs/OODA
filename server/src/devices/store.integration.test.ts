@@ -190,4 +190,76 @@ describe('device ledger API', () => {
     expect(memberUpdate.statusCode).toBe(403)
     await app.close()
   })
+
+  it('exposes occupancy and legal lifecycle transitions on the device read model', async () => {
+    const app = buildApp({ pool })
+    const adminCookie = await createAdminCookie()
+    const memberCookie = await createMemberCookie()
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/admin/devices',
+      headers: { cookie: adminCookie },
+      payload: { name: 'Occupied Device' },
+    })
+    const device = created.json()
+    expect(device.activeBorrow).toBeNull()
+    expect(device.allowedTransitions).toEqual(['maintenance', 'lost', 'archived'])
+
+    const dueAt = new Date(Date.now() + 2 * 60 * 60 * 1000)
+    const borrow = await app.inject({
+      method: 'POST',
+      url: '/api/borrows',
+      headers: { cookie: memberCookie, 'idempotency-key': 'read-model-borrow' },
+      payload: { deviceId: device.id, dueAt: dueAt.toISOString() },
+    })
+    expect(borrow.statusCode).toBe(201)
+
+    const listResponse = await app.inject({
+      method: 'GET',
+      url: '/api/devices',
+      headers: { cookie: memberCookie },
+    })
+    const listed = listResponse
+      .json()
+      .find((entry: { id: string }) => entry.id === device.id)
+    expect(listed.activeBorrow.id).toBe(borrow.json().id)
+    expect(
+      Math.abs(new Date(listed.activeBorrow.dueAt).getTime() - dueAt.getTime()),
+    ).toBeLessThan(1000)
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/devices/${device.id}`,
+      headers: { cookie: memberCookie },
+    })
+    expect(detail.json().activeBorrow.id).toBe(borrow.json().id)
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/borrows/${borrow.json().id}/return`,
+      headers: { cookie: memberCookie, 'idempotency-key': 'read-model-return' },
+      payload: {},
+    })
+    const afterReturn = await app.inject({
+      method: 'GET',
+      url: `/api/devices/${device.id}`,
+      headers: { cookie: memberCookie },
+    })
+    expect(afterReturn.json().activeBorrow).toBeNull()
+
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/admin/devices/${device.id}`,
+      headers: { cookie: adminCookie },
+      payload: { status: 'archived', reason: '读模型验收后归档' },
+    })
+    const archived = await app.inject({
+      method: 'GET',
+      url: `/api/devices/${device.id}`,
+      headers: { cookie: memberCookie },
+    })
+    expect(archived.json().status).toBe('archived')
+    expect(archived.json().allowedTransitions).toEqual([])
+    await app.close()
+  })
 })

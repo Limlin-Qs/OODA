@@ -258,4 +258,46 @@ describe('reservation and availability transactions', () => {
     expect(touching.json().available).toBe(true)
     await app.close()
   })
+
+  it('returns the active borrow interval on the availability read model', async () => {
+    const app = buildApp({ pool })
+    const adminCookie = await createAdminCookie()
+    const memberCookie = await createMemberCookie()
+    const deviceId = await createDevice(app, adminCookie)
+    const dueAt = new Date(Date.now() + 2 * 60 * 60 * 1000)
+    const borrow = await app.inject({
+      method: 'POST',
+      url: '/api/borrows',
+      headers: { cookie: memberCookie, 'idempotency-key': 'availability-active-borrow' },
+      payload: { deviceId, dueAt: dueAt.toISOString() },
+    })
+    expect(borrow.statusCode).toBe(201)
+
+    const availability = await app.inject({
+      method: 'GET',
+      url: `/api/devices/${deviceId}/availability?from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString())}`,
+      headers: { cookie: memberCookie },
+    })
+    expect(availability.statusCode).toBe(200)
+    expect(availability.json().activeBorrowId).toBe(borrow.json().id)
+    expect(availability.json().activeBorrow.id).toBe(borrow.json().id)
+    expect(
+      Math.abs(new Date(availability.json().activeBorrow.dueAt).getTime() - dueAt.getTime()),
+    ).toBeLessThan(1000)
+
+    await app.inject({
+      method: 'POST',
+      url: `/api/borrows/${borrow.json().id}/return`,
+      headers: { cookie: memberCookie, 'idempotency-key': 'availability-active-return' },
+      payload: {},
+    })
+    const afterReturn = await app.inject({
+      method: 'GET',
+      url: `/api/devices/${deviceId}/availability?from=${encodeURIComponent(new Date().toISOString())}&to=${encodeURIComponent(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString())}`,
+      headers: { cookie: memberCookie },
+    })
+    expect(afterReturn.json().activeBorrowId).toBeNull()
+    expect(afterReturn.json().activeBorrow).toBeNull()
+    await app.close()
+  })
 })

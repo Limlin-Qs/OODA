@@ -1,12 +1,22 @@
+export type DeviceStatus = 'available' | 'maintenance' | 'lost' | 'archived'
+
+export interface ActiveBorrowSummary {
+  id: string
+  borrowedAt: string
+  dueAt: string
+}
+
 export interface Device {
   id: string
   assetNumber: string
   serialNumber: string | null
   name: string
   category: string
-  status: 'available' | 'maintenance' | 'lost' | 'archived'
+  status: DeviceStatus
   maintenanceNotes: string
   attachmentNotes: string
+  activeBorrow: ActiveBorrowSummary | null
+  allowedTransitions: DeviceStatus[]
   createdAt: string
   updatedAt: string
 }
@@ -15,6 +25,7 @@ export interface Availability {
   available: boolean
   deviceStatus: string
   activeBorrowId: string | null
+  activeBorrow: ActiveBorrowSummary | null
   reservations: Array<{
     id: string
     startAt: string

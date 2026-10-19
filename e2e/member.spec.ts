@@ -5,7 +5,7 @@ test('authenticated member can borrow, return and reserve through the real UI', 
   await page.context().addCookies([{
     name: 'sharework_session',
     value: process.env.E2E_SESSION_TOKEN ?? '',
-    url: 'http://127.0.0.1:5173',
+    url: 'http://127.0.0.1:4116',
     httpOnly: true,
     sameSite: 'Lax',
   }])
@@ -24,6 +24,10 @@ test('authenticated member can borrow, return and reserve through the real UI', 
   await page.getByRole('button', { name: /我的记录/ }).click()
   await expect(page.getByText(process.env.E2E_BORROW_DEVICE ?? 'E2E Camera')).toBeVisible()
   await page.getByRole('button', { name: '确认归还' }).click()
+  const returnDialog = page.getByRole('dialog')
+  await expect(returnDialog).toContainText('确认归还')
+  await returnDialog.getByLabel('归还说明（可选）').fill('E2E 归还说明：配件齐全。')
+  await returnDialog.getByRole('button', { name: '确认归还' }).click()
   await expect(page.getByRole('status')).toContainText('归还已确认')
 
   await page.getByRole('button', { name: '设备目录' }).click()

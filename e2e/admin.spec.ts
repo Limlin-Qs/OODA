@@ -5,7 +5,7 @@ test('administrator can register a device and change lifecycle with a reason', a
   await page.context().addCookies([{
     name: 'sharework_session',
     value: process.env.E2E_ADMIN_SESSION_TOKEN ?? '',
-    url: 'http://127.0.0.1:5173',
+    url: 'http://127.0.0.1:4116',
     httpOnly: true,
     sameSite: 'Lax',
   }])
@@ -26,5 +26,13 @@ test('administrator can register a device and change lifecycle with a reason', a
   await deviceRow.getByRole('combobox').selectOption('maintenance')
   await deviceRow.getByPlaceholder('状态变更原因（必填）').fill('E2E 维护检查')
   await deviceRow.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByRole('status')).toContainText('设备状态已更新')
+
+  await deviceRow.getByRole('combobox').selectOption('archived')
+  await deviceRow.getByPlaceholder('状态变更原因（必填）').fill('E2E 归档确认')
+  await deviceRow.getByRole('button', { name: '保存' }).click()
+  const archiveDialog = page.getByRole('dialog')
+  await expect(archiveDialog).toContainText('归档')
+  await archiveDialog.getByRole('button', { name: '确认归档' }).click()
   await expect(page.getByRole('status')).toContainText('设备状态已更新')
 })

@@ -23,7 +23,7 @@ Deprecated（2026-09-12）。保留编号和文件以保存文档沿革；不再
 
 ## 当前实现（Current Implementation）
 
-不适用。仓库仍为 React/Vite 模板，没有产品功能。
+不适用。本记录已 Deprecated，仅保存文档沿革，不描述实现状态。
 
 ## 重新评估条件（Re-evaluation Triggers）
 

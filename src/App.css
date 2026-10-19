@@ -168,6 +168,42 @@ h2 { margin-bottom: 0; font-family: Georgia, serif; font-size: 34px; font-weight
 .member-row, .audit-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid #e7eee9; }
 .audit-row > div { min-width: 0; flex: 1; }
 .audit-row time { white-space: nowrap; }
+.action-feedback.success { color: #a9e2bd; }
+.action-feedback.error { color: #f4ad9c; }
+.action-feedback.info { color: #f1d48e; }
+.workspace-feedback.success { background: #eaf7ee; color: var(--green); }
+.workspace-feedback.error { background: #fde6df; color: #bf624e; }
+.workspace-feedback.info { background: #fdf3dd; color: #9a6b12; }
+.form-feedback.success { color: var(--green); }
+.form-feedback.error { color: #c45d4b; }
+.form-feedback.info { color: #9a6b12; }
+.ledger-feedback { display: block; margin: 0 0 12px; }
+.field-error { display: block; margin-top: 5px; color: #f4ad9c; font-size: 10px; }
+.field-wrap { display: grid; gap: 6px; }
+.timeline-block { margin: 20px 0 6px; }
+.timeline-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 9px; }
+.timeline-heading span { color: #e4f4e9; font-size: 11px; }
+.timeline-heading small { color: #779687; font-size: 9px; }
+.timeline { display: grid; gap: 5px; }
+.timeline-row { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 8px; }
+.timeline-day { color: #8fac9c; font-size: 10px; }
+.timeline-track { position: relative; height: 22px; border: 1px solid rgba(217,239,224,.14); border-radius: 6px; background: rgba(255,255,255,.06); cursor: pointer; overflow: hidden; }
+.timeline-track:hover, .timeline-track:focus-visible { border-color: rgba(201,241,220,.4); background: rgba(201,241,220,.16); outline: none; }
+.timeline-bar { position: absolute; top: 2px; bottom: 2px; display: flex; align-items: center; padding: 0 5px; border-radius: 4px; overflow: hidden; white-space: nowrap; font-size: 8px; }
+.timeline-bar.borrow { background: rgba(242,198,109,.82); color: #4a3a12; }
+.timeline-bar.borrow.overdue { background: rgba(236,130,106,.9); color: #fff; }
+.timeline-bar.reservation { background: rgba(124,180,158,.55); color: #e4f4e9; }
+.dialog-overlay { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px; background: rgba(22,35,31,.5); }
+.dialog-card { width: min(430px, 100%); padding: 24px; border-radius: 16px; background: #fff; box-shadow: 0 24px 60px rgba(22,35,31,.28); }
+.dialog-card h3 { margin-bottom: 8px; font-family: Georgia, serif; font-size: 22px; font-weight: 400; letter-spacing: -.03em; }
+.dialog-note { margin-bottom: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+.dialog-field { display: grid; gap: 6px; margin: 14px 0 4px; color: var(--muted); font-size: 11px; }
+.dialog-field textarea { resize: vertical; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fbfefc; color: var(--ink); font: inherit; font-size: 12px; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+.dialog-actions .primary-button, .dialog-actions .secondary-action, .dialog-actions .danger-button { width: auto; margin: 0; }
+.dialog-actions .secondary-action { border-color: var(--line); color: var(--ink); }
+.danger-button { padding: 10px 16px; border: 0; border-radius: 999px; background: #c45d4b; color: #fff; cursor: pointer; font: inherit; font-size: 12px; }
+.danger-button:disabled { cursor: wait; opacity: .55; }
 @media (max-width: 850px) { .main-nav { margin-right: 8px; } .workspace-grid { grid-template-columns: 1fr; } }
 @media (max-width: 850px) { .admin-grid { grid-template-columns: 1fr; } .admin-form { grid-column: auto; } }
 @media (max-width: 580px) { .main-nav { order: 3; width: 100%; justify-content: center; margin: 8px 0 0; } .topbar { flex-wrap: wrap; } .topbar-actions { margin-left: auto; } .workspace-section { padding-inline: 0; } .record-card { grid-template-columns: 1fr auto; } .record-card .small-action { grid-column: 1 / -1; justify-self: start; } .form-grid { grid-template-columns: 1fr; } .admin-device-row { grid-template-columns: 1fr auto; } .admin-device-row select { grid-column: 2; grid-row: 1; } .admin-change { grid-column: 1 / -1; } }

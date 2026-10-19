@@ -1,7 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { appendAudit } from '../audit/store.js'
-import { DomainRuleError, transitionDevice, type DeviceStatus } from '../domain/rules.js'
+import {
+  allowedDeviceTransitions,
+  DomainRuleError,
+  transitionDevice,
+  type DeviceStatus,
+} from '../domain/rules.js'
+
+export interface ActiveBorrowSummary {
+  id: string
+  borrowedAt: Date
+  dueAt: Date
+}
 
 export interface Device {
   id: string
@@ -12,6 +23,8 @@ export interface Device {
   status: DeviceStatus
   maintenanceNotes: string
   attachmentNotes: string
+  activeBorrow: ActiveBorrowSummary | null
+  allowedTransitions: DeviceStatus[]
   createdAt: Date
   updatedAt: Date
 }
@@ -45,6 +58,9 @@ interface DeviceRow {
   attachment_notes: string
   created_at: Date
   updated_at: Date
+  borrow_id: string | null
+  borrow_borrowed_at: Date | null
+  borrow_due_at: Date | null
 }
 
 function toDevice(row: DeviceRow): Device {
@@ -57,19 +73,39 @@ function toDevice(row: DeviceRow): Device {
     status: row.status,
     maintenanceNotes: row.maintenance_notes,
     attachmentNotes: row.attachment_notes,
+    activeBorrow:
+      row.borrow_id && row.borrow_borrowed_at && row.borrow_due_at
+        ? {
+            id: row.borrow_id,
+            borrowedAt: row.borrow_borrowed_at,
+            dueAt: row.borrow_due_at,
+          }
+        : null,
+    allowedTransitions: allowedDeviceTransitions(row.status),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
 }
 
 const deviceColumns = `
+  d.id, d.asset_number, d.serial_number, d.name, d.category, d.status,
+  d.maintenance_notes, d.attachment_notes, d.created_at, d.updated_at,
+  b.id AS borrow_id, b.borrowed_at AS borrow_borrowed_at, b.due_at AS borrow_due_at
+`
+
+const deviceFrom = `
+  FROM devices d
+  LEFT JOIN borrow_records b ON b.device_id = d.id AND b.status = 'active'
+`
+
+const deviceWriteColumns = `
   id, asset_number, serial_number, name, category, status,
   maintenance_notes, attachment_notes, created_at, updated_at
 `
 
 export async function listDevices(client: PoolClient): Promise<Device[]> {
   const result = await client.query<DeviceRow>(
-    `SELECT ${deviceColumns} FROM devices ORDER BY name, asset_number`,
+    `SELECT ${deviceColumns} ${deviceFrom} ORDER BY d.name, d.asset_number`,
   )
   return result.rows.map(toDevice)
 }
@@ -79,7 +115,7 @@ export async function findDevice(
   id: string,
 ): Promise<Device | null> {
   const result = await client.query<DeviceRow>(
-    `SELECT ${deviceColumns} FROM devices WHERE id = $1`,
+    `SELECT ${deviceColumns} ${deviceFrom} WHERE d.id = $1`,
     [id],
   )
   return result.rows[0] ? toDevice(result.rows[0]) : null
@@ -95,12 +131,12 @@ export async function createDevice(
   input: CreateDeviceInput,
 ): Promise<Device> {
   const id = randomUUID()
-  const result = await client.query<DeviceRow>(
+  await client.query(
     `INSERT INTO devices
       (id, asset_number, serial_number, name, category, status,
        maintenance_notes, attachment_notes)
      VALUES ($1, $2, $3, $4, $5, 'available', $6, $7)
-     RETURNING ${deviceColumns}`,
+     RETURNING ${deviceWriteColumns}`,
     [
       id,
       nextAssetNumber(),
@@ -111,7 +147,8 @@ export async function createDevice(
       input.attachmentNotes ?? '',
     ],
   )
-  const device = toDevice(result.rows[0])
+  const device = await findDevice(client, id)
+  if (!device) throw new Error('Device insert did not return a row.')
   await appendAudit(client, {
     entityType: 'device',
     entityId: device.id,
@@ -141,7 +178,7 @@ export async function updateDevice(
     }
     transitionDevice(current.status, input.status)
   }
-  const result = await client.query<DeviceRow>(
+  await client.query(
     `UPDATE devices SET
       name = $2,
       category = $3,
@@ -151,7 +188,7 @@ export async function updateDevice(
       attachment_notes = $7,
       updated_at = CURRENT_TIMESTAMP
      WHERE id = $1
-     RETURNING ${deviceColumns}`,
+     RETURNING ${deviceWriteColumns}`,
     [
       id,
       input.name ?? current.name,
@@ -162,7 +199,8 @@ export async function updateDevice(
       input.attachmentNotes ?? current.attachmentNotes,
     ],
   )
-  const device = toDevice(result.rows[0])
+  const device = await findDevice(client, id)
+  if (!device) return null
   await appendAudit(client, {
     entityType: 'device',
     entityId: device.id,

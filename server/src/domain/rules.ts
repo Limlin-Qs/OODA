@@ -30,6 +30,10 @@ const deviceTransitions: Record<DeviceStatus, readonly DeviceStatus[]> = {
   archived: [],
 }
 
+export function allowedDeviceTransitions(current: DeviceStatus): DeviceStatus[] {
+  return [...deviceTransitions[current]]
+}
+
 export function transitionDevice(
   current: DeviceStatus,
   next: DeviceStatus,

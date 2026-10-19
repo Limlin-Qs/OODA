@@ -20,47 +20,38 @@ import {
   type Availability,
   type Borrow,
   type Device,
+  type DeviceStatus,
   type AuditEntry,
   type Member,
   type Notification,
   type Reservation,
 } from './api'
+import {
+  apiMessage,
+  availabilitySummary,
+  blocksForDay,
+  borrowStatusLabel,
+  deviceStatusLabel,
+  deviceStatusTone,
+  formatDate,
+  occupancyBadge,
+  occupancyBlocks,
+  reservationStatusLabel,
+  suggestSlot,
+  timelineDays,
+  toInputValue,
+  validateDueAt,
+  validateInterval,
+  type TimelineDay,
+} from './ui-rules'
 import './App.css'
 
-const statusLabel: Record<Device['status'], string> = {
-  available: '可借用',
-  maintenance: '维修中',
-  lost: '已报失',
-  archived: '已归档',
-}
+type FeedbackArea = 'detail' | 'activity' | 'admin-form' | 'admin-ledger'
 
-const statusTone: Record<Device['status'], string> = {
-  available: 'positive',
-  maintenance: 'warning',
-  lost: 'danger',
-  archived: 'muted',
-}
-
-function formatDate(value: string): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
-function apiMessage(error: unknown): string {
-  if (!(error instanceof ApiError)) return '网络暂时不可用，请稍后重试。'
-  if (error.code === 'conflict') return '这件设备的时间已被占用，请刷新后选择其他时段。'
-  if (error.code === 'invalid_state') return '这条记录已经处理过，页面将同步最新状态。'
-  if (error.code === 'invalid_interval' || error.code === 'invalid_due_at') return '请检查时间：必须是未来有效时段。'
-  if (error.code === 'idempotency_conflict') return '请求已使用过相同操作编号，请重新提交。'
-  if (error.status === 401) return '会话已失效，请重新登录。'
-  if (error.status === 403) return '当前账号没有执行此操作的权限。'
-  if (error.status === 503) return '服务尚未完成运行配置，请联系管理员。'
-  if (error.status === 404) return '记录不存在或已归档。'
-  return '操作未完成，请稍后重试。'
+interface Feedback {
+  tone: 'success' | 'error' | 'info'
+  text: string
+  area: FeedbackArea
 }
 
 function operationKey(): string {
@@ -69,6 +60,10 @@ function operationKey(): string {
 
 function deviceName(devices: Device[], id: string): string {
   return devices.find((device) => device.id === id)?.name ?? '设备已归档'
+}
+
+function transitionChoices(device: Device): DeviceStatus[] {
+  return [device.status, ...device.allowedTransitions]
 }
 
 function App() {
@@ -89,14 +84,20 @@ function App() {
   const [reservations, setReservations] = useState<Reservation[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [actionBusy, setActionBusy] = useState<string | null>(null)
-  const [feedback, setFeedback] = useState<string | null>(null)
+  const [feedback, setFeedback] = useState<Feedback | null>(null)
+  const [now, setNow] = useState(() => new Date())
   const [dueAt, setDueAt] = useState('')
+  const [dueError, setDueError] = useState<string | null>(null)
   const [reservationStart, setReservationStart] = useState('')
   const [reservationEnd, setReservationEnd] = useState('')
+  const [intervalErrors, setIntervalErrors] = useState<{ startAt?: string; endAt?: string }>({})
+  const [returnTarget, setReturnTarget] = useState<Borrow | null>(null)
+  const [returnNotes, setReturnNotes] = useState('')
+  const [archiveTarget, setArchiveTarget] = useState<Device | null>(null)
   const [newDeviceName, setNewDeviceName] = useState('')
   const [newDeviceCategory, setNewDeviceCategory] = useState('')
   const [newDeviceSerial, setNewDeviceSerial] = useState('')
-  const [deviceStatus, setDeviceStatus] = useState<Device['status']>('available')
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('available')
   const [deviceReason, setDeviceReason] = useState('')
   const [editDeviceId, setEditDeviceId] = useState<string | null>(null)
 
@@ -111,6 +112,23 @@ function App() {
       .catch((loadError: unknown) => {
         setError(loadError)
         setListState('error')
+      })
+  }
+
+  function refreshDetail(id: string) {
+    const windowStart = new Date()
+    void Promise.all([
+      getDevice(id),
+      getAvailability(id, windowStart, new Date(windowStart.getTime() + 7 * 24 * 60 * 60 * 1000)),
+    ])
+      .then(([device, currentAvailability]) => {
+        setSelected(device)
+        setAvailability(currentAvailability)
+        setDetailState('ready')
+      })
+      .catch((detailError: unknown) => {
+        setError(detailError)
+        setDetailState('error')
       })
   }
 
@@ -166,6 +184,11 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const timer = globalThis.setInterval(() => setNow(new Date()), 60_000)
+    return () => globalThis.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
     if (view !== 'mine') return
     void Promise.resolve().then(() => loadActivity())
   }, [view])
@@ -183,9 +206,10 @@ function App() {
       .then(() => {
         if (cancelled) return null
         setDetailState('loading')
+        const windowStart = new Date()
         return Promise.all([
           getDevice(selectedId),
-          getAvailability(selectedId, new Date(), new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)),
+          getAvailability(selectedId, windowStart, new Date(windowStart.getTime() + 7 * 24 * 60 * 60 * 1000)),
         ])
       })
       .then((result) => {
@@ -215,6 +239,13 @@ function App() {
     [devices],
   )
 
+  const timeline = useMemo(() => {
+    const blocks = selected
+      ? occupancyBlocks(selected.activeBorrow, availability?.reservations ?? [], now)
+      : []
+    return { blocks, days: timelineDays(now) }
+  }, [selected, availability, now])
+
   function showView(nextView: 'catalog' | 'mine' | 'admin') {
     setView(nextView)
     if (nextView === 'catalog') setFeedback(null)
@@ -229,57 +260,104 @@ function App() {
     setSelectedId(id)
     setView('catalog')
     setFeedback(null)
+    setDueError(null)
+    setIntervalErrors({})
   }
 
   function handleBorrow() {
-    if (!selectedId || !dueAt || actionBusy) return
+    if (!selectedId || actionBusy) return
+    const check = validateDueAt(dueAt, new Date())
+    if (!check.ok || !check.dueAt) {
+      setDueError(check.fieldErrors.dueAt ?? '请选择归还期限')
+      return
+    }
+    setDueError(null)
     setActionBusy('borrow')
     setFeedback(null)
-    void createBorrow({ deviceId: selectedId, dueAt: new Date(dueAt).toISOString() }, operationKey())
+    void createBorrow({ deviceId: selectedId, dueAt: check.dueAt.toISOString() }, operationKey())
       .then(() => {
-        setFeedback('借用已登记，设备占用状态已更新。')
+        setFeedback({ tone: 'success', text: '借用已登记，设备占用状态已更新。', area: 'detail' })
         setDueAt('')
         loadDevices()
+        refreshDetail(selectedId)
         if (member) loadActivity()
       })
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => {
+        setDueAt('')
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'detail' })
+      })
       .finally(() => setActionBusy(null))
   }
 
   function handleReservation() {
-    if (!selectedId || !reservationStart || !reservationEnd || actionBusy) return
+    if (!selectedId || actionBusy) return
+    const check = validateInterval(reservationStart, reservationEnd, new Date())
+    if (!check.ok || !check.startAt || !check.endAt) {
+      setIntervalErrors(check.fieldErrors)
+      return
+    }
+    setIntervalErrors({})
     setActionBusy('reserve')
     setFeedback(null)
     void createReservation(
       {
         deviceId: selectedId,
-        startAt: new Date(reservationStart).toISOString(),
-        endAt: new Date(reservationEnd).toISOString(),
+        startAt: check.startAt.toISOString(),
+        endAt: check.endAt.toISOString(),
       },
       operationKey(),
     )
       .then(() => {
-        setFeedback('预约已创建，冲突检查由服务端完成。')
+        setFeedback({ tone: 'success', text: '预约已创建，冲突检查由服务端完成。', area: 'detail' })
         setReservationStart('')
         setReservationEnd('')
         loadDevices()
+        refreshDetail(selectedId)
         if (member) loadActivity()
       })
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => {
+        setReservationStart('')
+        setReservationEnd('')
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'detail' })
+      })
       .finally(() => setActionBusy(null))
   }
 
-  function handleReturn(id: string) {
-    if (actionBusy) return
-    setActionBusy(`return:${id}`)
+  function applySuggestedSlot(day: TimelineDay) {
+    const slot = suggestSlot(timeline.blocks, day, new Date())
+    if (!slot) {
+      setFeedback({ tone: 'error', text: '这一天没有足够长的空闲时段，请换一天或手动填写时间。', area: 'detail' })
+      return
+    }
+    setReservationStart(toInputValue(slot.startAt))
+    setReservationEnd(toInputValue(slot.endAt))
+    setIntervalErrors({})
+    setFeedback({
+      tone: 'info',
+      text: `已填入空闲时段 ${formatDate(slot.startAt)} — ${formatDate(slot.endAt)}，确认后可创建预约。`,
+      area: 'detail',
+    })
+  }
+
+  function confirmReturn() {
+    if (!returnTarget || actionBusy) return
+    const target = returnTarget
+    setActionBusy(`return:${target.id}`)
     setFeedback(null)
-    void returnBorrow(id, operationKey())
+    void returnBorrow(target.id, operationKey(), returnNotes.trim())
       .then(() => {
-        setFeedback('归还已确认。')
+        setFeedback({ tone: 'success', text: '归还已确认，设备恢复可借用。', area: 'activity' })
+        setReturnTarget(null)
+        setReturnNotes('')
         loadActivity()
         loadDevices()
+        if (selectedId) refreshDetail(selectedId)
       })
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => {
+        setReturnTarget(null)
+        setReturnNotes('')
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'activity' })
+      })
       .finally(() => setActionBusy(null))
   }
 
@@ -289,11 +367,14 @@ function App() {
     setFeedback(null)
     void cancelReservation(id, operationKey())
       .then(() => {
-        setFeedback('预约已取消。')
+        setFeedback({ tone: 'success', text: '预约已取消。', area: 'activity' })
         loadActivity()
         loadDevices()
+        if (selectedId) refreshDetail(selectedId)
       })
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => {
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'activity' })
+      })
       .finally(() => setActionBusy(null))
   }
 
@@ -302,7 +383,7 @@ function App() {
     setActionBusy(`read:${notification.id}`)
     void markNotificationRead(notification.id)
       .then(() => setNotifications((current) => current.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item)))
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'activity' }))
       .finally(() => setActionBusy(null))
   }
 
@@ -316,34 +397,59 @@ function App() {
       serialNumber: newDeviceSerial.trim() || undefined,
     })
       .then(() => {
-        setFeedback('设备已登记，系统已生成唯一资产编号。')
+        setFeedback({ tone: 'success', text: '设备已登记，系统已生成唯一资产编号。', area: 'admin-form' })
         setNewDeviceName('')
         setNewDeviceCategory('')
         setNewDeviceSerial('')
         loadDevices()
         loadAdmin()
       })
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => {
+        setNewDeviceName('')
+        setNewDeviceCategory('')
+        setNewDeviceSerial('')
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'admin-form' })
+      })
       .finally(() => setActionBusy(null))
+  }
+
+  function requestStatusUpdate(device: Device) {
+    if (deviceStatus === 'archived' && device.status !== 'archived') {
+      setArchiveTarget(device)
+      return
+    }
+    handleUpdateDevice()
   }
 
   function handleUpdateDevice() {
     if (!editDeviceId || actionBusy) return
-    setActionBusy(`update-device:${editDeviceId}`)
+    const targetId = editDeviceId
+    setActionBusy(`update-device:${targetId}`)
     setFeedback(null)
-    void updateDevice(editDeviceId, { status: deviceStatus, reason: deviceReason.trim() })
+    void updateDevice(targetId, { status: deviceStatus, reason: deviceReason.trim() })
       .then(() => {
-        setFeedback('设备状态已更新，变更已写入审计。')
+        setFeedback({ tone: 'success', text: '设备状态已更新，变更已写入审计。', area: 'admin-ledger' })
         setEditDeviceId(null)
+        setDeviceStatus('available')
         setDeviceReason('')
+        setArchiveTarget(null)
         loadDevices()
         loadAdmin()
+        if (selectedId === targetId) refreshDetail(targetId)
       })
-      .catch((actionError: unknown) => setFeedback(apiMessage(actionError)))
+      .catch((actionError: unknown) => {
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'admin-ledger' })
+        setEditDeviceId(null)
+        setDeviceStatus('available')
+        setDeviceReason('')
+        setArchiveTarget(null)
+        loadDevices()
+      })
       .finally(() => setActionBusy(null))
   }
 
   const unreadCount = notifications.filter((notification) => !notification.readAt).length
+  const badgeFor = (device: Device) => occupancyBadge(device, now)
 
   return (
     <div className="app-shell">
@@ -404,7 +510,7 @@ function App() {
                       <button className={`device-card ${selectedId === device.id ? 'selected' : ''}`} key={device.id} type="button" onClick={() => chooseDevice(device.id)}>
                         <span className="card-index">0{index + 1}</span><span className="device-glyph">{device.category ? device.category.slice(0, 1).toUpperCase() : 'D'}</span>
                         <span className="device-card-copy"><strong>{device.name}</strong><small>{device.assetNumber} · {device.category || '未分类'}</small></span>
-                        <span className={`status-pill ${statusTone[device.status]}`}><i />{statusLabel[device.status]}</span><span className="card-arrow">↗</span>
+                        <span className={`status-pill ${badgeFor(device).tone}`}><i />{badgeFor(device).label}</span><span className="card-arrow">↗</span>
                       </button>
                     ))}
                   </div>
@@ -414,19 +520,49 @@ function App() {
                     {selectedId && detailState === 'error' && <div className="detail-placeholder error-text"><span>!</span><p>{apiMessage(error)}</p></div>}
                     {selected && selected.id === selectedId && detailState === 'ready' && (
                       <div className="detail-content">
-                        <div className="detail-top"><span className={`status-pill ${statusTone[selected.status]}`}><i />{statusLabel[selected.status]}</span><span className="detail-id">{selected.assetNumber}</span></div>
+                        <div className="detail-top"><span className={`status-pill ${badgeFor(selected).tone}`}><i />{badgeFor(selected).label}</span><span className="detail-id">{selected.assetNumber}</span></div>
                         <h3>{selected.name}</h3><p className="detail-category">{selected.category || '未分类设备'}</p>
-                        <dl className="detail-list"><div><dt>序列号</dt><dd>{selected.serialNumber || '未登记'}</dd></div><div><dt>未来七天</dt><dd>{availability?.available ? '可预约' : '已有占用安排'}</dd></div></dl>
-                        {availability && availability.reservations.length > 0 && <div className="booking-note"><span>◷</span><p>已有 {availability.reservations.length} 个未来预约时段，请选择其他时间。</p></div>}
+                        <dl className="detail-list"><div><dt>序列号</dt><dd>{selected.serialNumber || '未登记'}</dd></div><div><dt>未来七天</dt><dd>{availabilitySummary(timeline.blocks, now)}</dd></div><div><dt>台账状态</dt><dd>{deviceStatusLabel[selected.status]}</dd></div></dl>
+                        <div className="timeline-block">
+                          <div className="timeline-heading"><span>未来 7 天占用</span><small>点击空闲时段可填入预约时间</small></div>
+                          <div className="timeline">
+                            {timeline.days.map((day) => (
+                              <div className="timeline-row" key={day.key}>
+                                <span className="timeline-day">{day.label}</span>
+                                <div
+                                  className="timeline-track"
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-label={`为 ${day.label} 填入空闲时段`}
+                                  onClick={() => applySuggestedSlot(day)}
+                                  onKeyDown={(event) => {
+                                    if (event.key === 'Enter' || event.key === ' ') {
+                                      event.preventDefault()
+                                      applySuggestedSlot(day)
+                                    }
+                                  }}
+                                >
+                                  {blocksForDay(timeline.blocks, day).map((block) => (
+                                    <span
+                                      key={`${block.kind}-${block.startAt.toISOString()}`}
+                                      className={`timeline-bar ${block.kind}${block.overdue ? ' overdue' : ''}`}
+                                      style={{ left: `${block.left}%`, width: `${block.width}%` }}
+                                    >{block.label}</span>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                         {selected.maintenanceNotes && <div className="maintenance-note"><span>i</span><p>{selected.maintenanceNotes}</p></div>}
                         {member ? (
                           <div className="action-stack">
-                            <label>借用至<input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} /></label>
-                            <button className="detail-action" type="button" onClick={handleBorrow} disabled={!dueAt || selected.status !== 'available' || Boolean(actionBusy)}>借用这件设备 <span>→</span></button>
+                            <div className="field-wrap"><label>借用至<input type="datetime-local" value={dueAt} min={toInputValue(now)} onChange={(event) => { setDueAt(event.target.value); setDueError(null) }} /></label>{dueError && <span className="field-error" role="alert">{dueError}</span>}</div>
+                            <button className="detail-action" type="button" onClick={handleBorrow} disabled={!dueAt || selected.status !== 'available' || selected.activeBorrow !== null || Boolean(actionBusy)} title={selected.activeBorrow ? '设备当前借出中，归还后才能再次借出' : undefined}>借用这件设备 <span>→</span></button>
                             <div className="action-divider"><span>或预约未来时段</span></div>
-                            <div className="time-grid"><label>开始<input type="datetime-local" value={reservationStart} onChange={(event) => setReservationStart(event.target.value)} /></label><label>结束<input type="datetime-local" value={reservationEnd} onChange={(event) => setReservationEnd(event.target.value)} /></label></div>
+                            <div className="time-grid"><div className="field-wrap"><label>开始<input type="datetime-local" value={reservationStart} min={toInputValue(now)} onChange={(event) => { setReservationStart(event.target.value); setIntervalErrors((current) => ({ ...current, startAt: undefined })) }} /></label>{intervalErrors.startAt && <span className="field-error" role="alert">{intervalErrors.startAt}</span>}</div><div className="field-wrap"><label>结束<input type="datetime-local" value={reservationEnd} min={reservationStart || toInputValue(now)} onChange={(event) => { setReservationEnd(event.target.value); setIntervalErrors((current) => ({ ...current, endAt: undefined })) }} /></label>{intervalErrors.endAt && <span className="field-error" role="alert">{intervalErrors.endAt}</span>}</div></div>
                             <button className="secondary-action" type="button" onClick={handleReservation} disabled={!reservationStart || !reservationEnd || selected.status !== 'available' || Boolean(actionBusy)}>创建预约</button>
-                            {feedback && <p className="action-feedback" role="status">{feedback}</p>}
+                            {feedback?.area === 'detail' && <p className={`action-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}
                           </div>
                         ) : (
                           <a className="detail-action" href="/auth/login">登录后借用或预约 <span>→</span></a>
@@ -442,7 +578,7 @@ function App() {
         ) : view === 'mine' ? (
           <section className="workspace-section">
             <div className="section-heading"><div><p className="eyebrow">MEMBER SPACE</p><h1>我的记录</h1><p className="lede">只显示当前登录成员负责的借用、预约和提醒。</p></div><button className="refresh-button" type="button" onClick={loadActivity} disabled={activityState === 'loading'}>↻ 刷新记录</button></div>
-            {feedback && <p className="workspace-feedback" role="status">{feedback}</p>}
+            {feedback?.area === 'activity' && <p className={`workspace-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}
             {activityState === 'loading' && <div className="state-panel loading-panel"><span className="loader" /><p>正在读取你的记录…</p></div>}
             {activityState === 'unauthenticated' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>需要登录</h3><p>只有服务端确认的成员身份才能查看本人记录。</p><a className="primary-button" href="/auth/login">登录 Sharework</a></div>}
             {activityState === 'error' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>记录暂时无法打开</h3><p>{apiMessage(error)}</p><button className="primary-button" type="button" onClick={loadActivity}>重新加载</button></div>}
@@ -450,10 +586,10 @@ function App() {
               <div className="workspace-grid">
                 <div className="workspace-main">
                   <section className="record-section"><div className="record-heading"><h2>借用记录</h2><span>{borrows.length}</span></div>
-                    {borrows.length === 0 ? <p className="record-empty">还没有借用记录。</p> : <div className="record-list">{borrows.map((borrow) => <article className="record-card" key={borrow.id}><div><strong>{deviceName(devices, borrow.deviceId)}</strong><small>{borrow.status === 'active' ? '借用中' : '已归还'} · 借出于 {formatDate(borrow.borrowedAt)}</small></div><span className={`record-status ${borrow.status === 'active' ? 'warning' : 'muted'}`}>{borrow.status === 'active' ? '应还 ' + formatDate(borrow.dueAt) : '已于 ' + formatDate(borrow.returnedAt ?? borrow.dueAt) }</span>{borrow.status === 'active' && <button className="small-action" type="button" onClick={() => handleReturn(borrow.id)} disabled={Boolean(actionBusy)}>确认归还</button>}</article>)}</div>}
+                    {borrows.length === 0 ? <p className="record-empty">还没有借用记录。</p> : <div className="record-list">{borrows.map((borrow) => <article className="record-card" key={borrow.id}><div><strong>{deviceName(devices, borrow.deviceId)}</strong><small>{borrowStatusLabel(borrow.status)} · 借出于 {formatDate(borrow.borrowedAt)}{borrow.returnNotes ? ` · 归还说明：${borrow.returnNotes}` : ''}</small></div><span className={`record-status ${borrow.status === 'active' ? 'warning' : 'muted'}`}>{borrow.status === 'active' ? '应还 ' + formatDate(borrow.dueAt) : '已于 ' + formatDate(borrow.returnedAt ?? borrow.dueAt) }</span>{borrow.status === 'active' && <button className="small-action" type="button" onClick={() => { setReturnTarget(borrow); setReturnNotes('') }} disabled={Boolean(actionBusy)}>确认归还</button>}</article>)}</div>}
                   </section>
                   <section className="record-section"><div className="record-heading"><h2>预约记录</h2><span>{reservations.length}</span></div>
-                    {reservations.length === 0 ? <p className="record-empty">还没有预约记录。</p> : <div className="record-list">{reservations.map((reservation) => <article className="record-card" key={reservation.id}><div><strong>{deviceName(devices, reservation.deviceId)}</strong><small>{formatDate(reservation.startAt)} — {formatDate(reservation.endAt)}</small></div><span className={`record-status ${reservation.status === 'active' ? 'positive' : 'muted'}`}>{reservation.status === 'active' ? '生效中' : '已取消'}</span>{reservation.status === 'active' && <button className="small-action" type="button" onClick={() => handleCancel(reservation.id)} disabled={Boolean(actionBusy)}>取消预约</button>}</article>)}</div>}
+                    {reservations.length === 0 ? <p className="record-empty">还没有预约记录。</p> : <div className="record-list">{reservations.map((reservation) => <article className="record-card" key={reservation.id}><div><strong>{deviceName(devices, reservation.deviceId)}</strong><small>{formatDate(reservation.startAt)} — {formatDate(reservation.endAt)}</small></div><span className={`record-status ${reservation.status === 'active' ? 'positive' : 'muted'}`}>{reservationStatusLabel(reservation.status)}</span>{reservation.status === 'active' && <button className="small-action" type="button" onClick={() => handleCancel(reservation.id)} disabled={Boolean(actionBusy)}>取消预约</button>}</article>)}</div>}
                   </section>
                 </div>
                 <aside className="notification-panel"><div className="record-heading"><h2>提醒</h2><span>{unreadCount}</span></div>{notifications.length === 0 ? <p className="record-empty">暂无提醒。</p> : <div className="notification-list">{notifications.map((notification) => <button className={`notification-item ${notification.readAt ? 'read' : ''}`} key={notification.id} type="button" onClick={() => handleReadNotification(notification)}><i /> <span><strong>{notification.stage === 'overdue' ? '设备已超期' : '设备占用提醒'}</strong><small>借用记录 · {notification.borrowId.slice(0, 8)} · {notification.readAt ? '已读' : '点击标记已读'}</small></span></button>)}</div>}</aside>
@@ -467,14 +603,41 @@ function App() {
             {adminState === 'forbidden' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>没有管理权限</h3><p>管理员权限由服务端会话确认，不能通过前端切换。</p></div>}
             {adminState === 'error' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>工作台暂时无法打开</h3><p>{apiMessage(error)}</p><button className="primary-button" type="button" onClick={loadAdmin}>重新加载</button></div>}
             {adminState === 'ready' && <div className="admin-grid">
-              <section className="record-section admin-form"><div className="record-heading"><h2>登记设备</h2><span>新</span></div><div className="form-grid"><label>设备名称<input value={newDeviceName} onChange={(event) => setNewDeviceName(event.target.value)} placeholder="例如：Sony A7 IV" /></label><label>类别<input value={newDeviceCategory} onChange={(event) => setNewDeviceCategory(event.target.value)} placeholder="相机 / 音频 / 灯光" /></label><label>序列号（可选）<input value={newDeviceSerial} onChange={(event) => setNewDeviceSerial(event.target.value)} /></label></div><button className="primary-button" type="button" onClick={handleCreateDevice} disabled={!newDeviceName.trim() || Boolean(actionBusy)}>登记设备</button>{feedback && <p className="form-feedback" role="status">{feedback}</p>}</section>
-              <section className="record-section"><div className="record-heading"><h2>设备台账</h2><span>{devices.length}</span></div><div className="admin-device-list">{devices.length === 0 ? <p className="record-empty">暂无设备。</p> : devices.map((device) => <article className="admin-device-row" key={device.id}><div><strong>{device.name}</strong><small>{device.assetNumber} · {device.category || '未分类'}</small></div><span className={`record-status ${statusTone[device.status]}`}>{statusLabel[device.status]}</span><select value={editDeviceId === device.id ? deviceStatus : device.status} onChange={(event) => { setEditDeviceId(device.id); setDeviceStatus(event.target.value as Device['status']); setDeviceReason('') }} aria-label={`${device.name}状态`}><option value="available">可借用</option><option value="maintenance">维修中</option><option value="lost">已报失</option><option value="archived">已归档</option></select>{editDeviceId === device.id && deviceStatus !== device.status && <div className="admin-change"><input value={deviceReason} onChange={(event) => setDeviceReason(event.target.value)} placeholder="状态变更原因（必填）" /><button className="small-action" type="button" onClick={handleUpdateDevice} disabled={!deviceReason.trim() || Boolean(actionBusy)}>保存</button></div>}</article>)}</div></section>
+              <section className="record-section admin-form"><div className="record-heading"><h2>登记设备</h2><span>新</span></div><div className="form-grid"><label>设备名称<input value={newDeviceName} onChange={(event) => setNewDeviceName(event.target.value)} placeholder="例如：Sony A7 IV" /></label><label>类别<input value={newDeviceCategory} onChange={(event) => setNewDeviceCategory(event.target.value)} placeholder="相机 / 音频 / 灯光" /></label><label>序列号（可选）<input value={newDeviceSerial} onChange={(event) => setNewDeviceSerial(event.target.value)} /></label></div><button className="primary-button" type="button" onClick={handleCreateDevice} disabled={!newDeviceName.trim() || Boolean(actionBusy)}>登记设备</button>{feedback?.area === 'admin-form' && <p className={`form-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}</section>
+              <section className="record-section"><div className="record-heading"><h2>设备台账</h2><span>{devices.length}</span></div>{feedback?.area === 'admin-ledger' && <p className={`form-feedback ledger-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}<div className="admin-device-list">{devices.length === 0 ? <p className="record-empty">暂无设备。</p> : devices.map((device) => <article className="admin-device-row" key={device.id}><div><strong>{device.name}</strong><small>{device.assetNumber} · {device.category || '未分类'}</small></div><span className={`record-status ${deviceStatusTone[device.status]}`}>{deviceStatusLabel[device.status]}</span><select value={editDeviceId === device.id ? deviceStatus : device.status} disabled={device.allowedTransitions.length === 0} onChange={(event) => { setEditDeviceId(device.id); setDeviceStatus(event.target.value as DeviceStatus); setDeviceReason('') }} aria-label={`${device.name}状态`}>{transitionChoices(device).map((status) => <option key={status} value={status}>{deviceStatusLabel[status]}</option>)}</select>{editDeviceId === device.id && deviceStatus !== device.status && <div className="admin-change"><input value={deviceReason} onChange={(event) => setDeviceReason(event.target.value)} placeholder="状态变更原因（必填）" /><button className="small-action" type="button" onClick={() => requestStatusUpdate(device)} disabled={!deviceReason.trim() || Boolean(actionBusy)}>保存</button></div>}</article>)}</div></section>
               <section className="record-section"><div className="record-heading"><h2>成员</h2><span>{adminMembers.length}</span></div><div className="member-list">{adminMembers.map((adminMember) => <div className="member-row" key={adminMember.id}><span>{adminMember.displayName}</span><small>{adminMember.role === 'admin' ? '管理员' : '成员'} · {adminMember.status === 'active' ? '启用' : '停用'}</small></div>)}</div></section>
               <section className="record-section audit-section"><div className="record-heading"><h2>最近审计</h2><span>{auditEntries.length}</span></div>{auditEntries.length === 0 ? <p className="record-empty">暂无审计记录。</p> : <div className="audit-list">{auditEntries.slice(0, 20).map((entry) => <div className="audit-row" key={entry.id}><div><strong>{entry.action}</strong><small>{entry.entityType} · {entry.entityId.slice(0, 12)}</small></div><span className={`record-status ${entry.result === 'success' ? 'positive' : 'warning'}`}>{entry.result === 'success' ? '成功' : entry.result === 'denied' ? '拒绝' : '失败'}</span><time>{formatDate(entry.occurredAt)}</time></div>)}</div>}</section>
             </div>}
           </section>
         )}
       </main>
+      {returnTarget && (
+        <div className="dialog-overlay" role="presentation" onClick={() => { if (!actionBusy) { setReturnTarget(null); setReturnNotes('') } }}>
+          <div className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="return-dialog-title" onClick={(event) => event.stopPropagation()}>
+            <h3 id="return-dialog-title">确认归还「{deviceName(devices, returnTarget.deviceId)}」？</h3>
+            <p className="dialog-note">归还后设备恢复可借用，借用记录转为已归还且不可撤销。如有损坏、配件缺失或保养需求，请在下方说明，管理员可在审计中追溯。</p>
+            <label className="dialog-field">归还说明（可选）
+              <textarea value={returnNotes} onChange={(event) => setReturnNotes(event.target.value)} placeholder="例如：镜头有轻微划痕，配件已齐全归还。" rows={3} />
+            </label>
+            <div className="dialog-actions">
+              <button className="secondary-action" type="button" onClick={() => { setReturnTarget(null); setReturnNotes('') }} disabled={Boolean(actionBusy)}>取消</button>
+              <button className="primary-button" type="button" onClick={confirmReturn} disabled={Boolean(actionBusy)}>{actionBusy ? '提交中…' : '确认归还'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {archiveTarget && (
+        <div className="dialog-overlay" role="presentation" onClick={() => { if (!actionBusy) setArchiveTarget(null) }}>
+          <div className="dialog-card" role="dialog" aria-modal="true" aria-labelledby="archive-dialog-title" onClick={(event) => event.stopPropagation()}>
+            <h3 id="archive-dialog-title">归档「{archiveTarget.name}」？</h3>
+            <p className="dialog-note">归档是终止状态：设备将退出可借用列表，之后不能再恢复为可借用或维修中。此操作会记录原因并写入审计，且不可撤销。</p>
+            <div className="dialog-actions">
+              <button className="secondary-action" type="button" onClick={() => setArchiveTarget(null)} disabled={Boolean(actionBusy)}>取消</button>
+              <button className="danger-button" type="button" onClick={handleUpdateDevice} disabled={Boolean(actionBusy)}>{actionBusy ? '提交中…' : '确认归档'}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <footer className="footer"><span>SHAREWORK / STUDIO RESOURCE SYSTEM</span><span>单工作室 · 实物设备 MVP</span></footer>
     </div>
   )
