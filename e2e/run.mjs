@@ -10,6 +10,7 @@ let adminSessionToken = ''
 let borrowDeviceName = ''
 let reservationDeviceName = ''
 let adminDeviceName = ''
+let targetMemberName = ''
 
 function runProcess(command, args, env) {
   return new Promise((resolve, reject) => {
@@ -29,9 +30,11 @@ async function prepareAuthenticatedScenario() {
   const deviceId = `e2e-device-${suffix}`
   const reservationDeviceId = `e2e-reservation-device-${suffix}`
   const adminMemberId = `e2e-admin-${suffix}`
+  const targetMemberId = `e2e-target-${suffix}`
   borrowDeviceName = `E2E Camera ${suffix}`
   reservationDeviceName = `E2E Light ${suffix}`
   adminDeviceName = `E2E Admin Device ${suffix}`
+  targetMemberName = `E2E Target ${suffix}`
   await testPool.query(
     `INSERT INTO members (id, identity_subject, display_name, role, status)
      VALUES ($1, $2, $3, 'member', 'active')`,
@@ -46,6 +49,11 @@ async function prepareAuthenticatedScenario() {
     `INSERT INTO members (id, identity_subject, display_name, role, status)
      VALUES ($1, $2, $3, 'admin', 'active')`,
     [adminMemberId, `e2e-admin-subject-${suffix}`, `E2E Admin ${suffix}`],
+  )
+  await testPool.query(
+    `INSERT INTO members (id, identity_subject, display_name, role, status)
+     VALUES ($1, $2, $3, 'member', 'active')`,
+    [targetMemberId, `e2e-target-subject-${suffix}`, targetMemberName],
   )
   sessionToken = randomUUID()
   const tokenHash = createHash('sha256').update(sessionToken).digest('hex')
@@ -69,7 +77,7 @@ const server = spawn(process.execPath, ['server-dist/server/src/main.js'], {
   env: { ...process.env, DATABASE_URL: databaseUrl ?? process.env.DATABASE_URL ?? '', HOST: '127.0.0.1', PORT: serverPort },
   stdio: 'inherit',
 })
-const web = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--host', '127.0.0.1', '--port', '5173'], {
+const web = spawn(process.execPath, ['node_modules/vite/bin/vite.js', 'preview', '--host', '127.0.0.1', '--port', '5173', '--strictPort'], {
   stdio: 'inherit',
 })
 
@@ -110,7 +118,7 @@ try {
   const playwright = spawn(
     process.execPath,
     ['node_modules/@playwright/test/cli.js', 'test'],
-    { env: { ...process.env, E2E_SESSION_TOKEN: sessionToken, E2E_ADMIN_SESSION_TOKEN: adminSessionToken, E2E_BORROW_DEVICE: borrowDeviceName, E2E_RESERVATION_DEVICE: reservationDeviceName, E2E_ADMIN_DEVICE: adminDeviceName }, stdio: 'inherit' },
+    { env: { ...process.env, E2E_SESSION_TOKEN: sessionToken, E2E_ADMIN_SESSION_TOKEN: adminSessionToken, E2E_BORROW_DEVICE: borrowDeviceName, E2E_RESERVATION_DEVICE: reservationDeviceName, E2E_ADMIN_DEVICE: adminDeviceName, E2E_TARGET_MEMBER: targetMemberName }, stdio: 'inherit' },
   )
 
   const exitCode = await new Promise((resolve) => {

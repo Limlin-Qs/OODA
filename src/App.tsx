@@ -17,6 +17,7 @@ import {
   markNotificationRead,
   returnBorrow,
   updateDevice,
+  updateMember,
   type Availability,
   type Borrow,
   type Device,
@@ -46,7 +47,7 @@ import {
 } from './ui-rules'
 import './App.css'
 
-type FeedbackArea = 'detail' | 'activity' | 'admin-form' | 'admin-ledger'
+type FeedbackArea = 'detail' | 'activity' | 'admin-form' | 'admin-ledger' | 'admin-members'
 
 interface Feedback {
   tone: 'success' | 'error' | 'info'
@@ -100,6 +101,12 @@ function App() {
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus>('available')
   const [deviceReason, setDeviceReason] = useState('')
   const [editDeviceId, setEditDeviceId] = useState<string | null>(null)
+  const [memberAction, setMemberAction] = useState<{
+    target: Member
+    change: { role?: Member['role']; status?: Member['status'] }
+    label: string
+  } | null>(null)
+  const [memberReason, setMemberReason] = useState('')
 
   function loadDevices() {
     setListState('loading')
@@ -448,6 +455,29 @@ function App() {
       .finally(() => setActionBusy(null))
   }
 
+  function handleUpdateMember() {
+    if (!memberAction || actionBusy) return
+    const action = memberAction
+    const reason = memberReason.trim()
+    if (!reason) return
+    setActionBusy(`member:${action.target.id}`)
+    setFeedback(null)
+    void updateMember(action.target.id, { ...action.change, reason })
+      .then(() => {
+        setFeedback({ tone: 'success', text: `${action.label}已完成，变更已写入审计。`, area: 'admin-members' })
+        setMemberAction(null)
+        setMemberReason('')
+        loadAdmin()
+      })
+      .catch((actionError: unknown) => {
+        setFeedback({ tone: 'error', text: apiMessage(actionError), area: 'admin-members' })
+        setMemberAction(null)
+        setMemberReason('')
+        loadAdmin()
+      })
+      .finally(() => setActionBusy(null))
+  }
+
   const unreadCount = notifications.filter((notification) => !notification.readAt).length
   const badgeFor = (device: Device) => occupancyBadge(device, now)
 
@@ -456,7 +486,7 @@ function App() {
       <header className="topbar">
         <a className="brand" href="/" onClick={() => showView('catalog')}>
           <span className="brand-mark">S</span>
-          <span><strong>Sharework</strong><small>Studio inventory</small></span>
+          <span><strong>Sharework</strong><small>物资共享</small></span>
         </a>
         <nav className="main-nav" aria-label="主导航">
           <button className={view === 'catalog' ? 'nav-link active' : 'nav-link'} type="button" onClick={() => showView('catalog')}>设备目录</button>
@@ -472,29 +502,20 @@ function App() {
       <main className="page-content">
         {view === 'catalog' ? (
           <>
-            <section className="hero-copy">
+            <section className="page-header">
               <div>
-                <p className="eyebrow">设备目录 / INVENTORY</p>
-                <h1>找到下一件<br /><em>要用的设备。</em></h1>
-                <p className="lede">查看工作室设备状态、当前占用与未来七天的可用性。</p>
+                <h1>设备目录</h1>
+                <p className="lede">查看设备状态、当前占用与未来七天的可用性，选择设备后即可借用或预约。</p>
               </div>
-              <div className="hero-orbit" aria-hidden="true">
-                <span className="orbit orbit-one" /><span className="orbit orbit-two" /><span className="orbit-core">24<br /><small>HUB</small></span>
+              <div className="page-header-side">
+                <p className="stats-line">
+                  共 <strong>{counts.total}</strong> 台 · 可借用 <strong>{counts.available}</strong> · 维修中 <strong>{counts.maintenance}</strong>
+                </p>
+                <button className="refresh-button" type="button" onClick={loadDevices} disabled={listState === 'loading'}><span className={listState === 'loading' ? 'spin' : ''}>↻</span> 刷新</button>
               </div>
-            </section>
-
-            <section className="metric-row" aria-label="设备概览">
-              <div className="metric-card accent"><span>全部设备</span><strong>{counts.total}</strong><small>已登记资产</small></div>
-              <div className="metric-card"><span>可借用</span><strong>{counts.available}</strong><small>等待新的使用者</small></div>
-              <div className="metric-card"><span>维护中</span><strong>{counts.maintenance}</strong><small>暂不可用</small></div>
-              <div className="metric-note"><span className="spark">✦</span><p>设备状态由服务端实时计算，预约冲突会在提交时再次校验。</p></div>
             </section>
 
             <section className="catalog-section">
-              <div className="section-heading">
-                <div><p className="eyebrow">BROWSE</p><h2>设备总览</h2></div>
-                <button className="refresh-button" type="button" onClick={loadDevices} disabled={listState === 'loading'}><span className={listState === 'loading' ? 'spin' : ''}>↻</span> 刷新目录</button>
-              </div>
               {listState === 'loading' && <div className="state-panel loading-panel"><span className="loader" /><p>正在同步设备目录…</p></div>}
               {listState === 'error' && (
                 <div className="state-panel error-panel">
@@ -506,11 +527,10 @@ function App() {
               {listState === 'ready' && devices.length > 0 && (
                 <div className="catalog-layout">
                   <div className="device-grid">
-                    {devices.map((device, index) => (
+                    {devices.map((device) => (
                       <button className={`device-card ${selectedId === device.id ? 'selected' : ''}`} key={device.id} type="button" onClick={() => chooseDevice(device.id)}>
-                        <span className="card-index">0{index + 1}</span><span className="device-glyph">{device.category ? device.category.slice(0, 1).toUpperCase() : 'D'}</span>
                         <span className="device-card-copy"><strong>{device.name}</strong><small>{device.assetNumber} · {device.category || '未分类'}</small></span>
-                        <span className={`status-pill ${badgeFor(device).tone}`}><i />{badgeFor(device).label}</span><span className="card-arrow">↗</span>
+                        <span className={`status-pill ${badgeFor(device).tone}`}><i />{badgeFor(device).label}</span>
                       </button>
                     ))}
                   </div>
@@ -577,7 +597,7 @@ function App() {
           </>
         ) : view === 'mine' ? (
           <section className="workspace-section">
-            <div className="section-heading"><div><p className="eyebrow">MEMBER SPACE</p><h1>我的记录</h1><p className="lede">只显示当前登录成员负责的借用、预约和提醒。</p></div><button className="refresh-button" type="button" onClick={loadActivity} disabled={activityState === 'loading'}>↻ 刷新记录</button></div>
+            <div className="section-heading"><div><h1>我的记录</h1><p className="lede">当前账号名下的借用、预约和逾期提醒。</p></div><button className="refresh-button" type="button" onClick={loadActivity} disabled={activityState === 'loading'}>↻ 刷新</button></div>
             {feedback?.area === 'activity' && <p className={`workspace-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}
             {activityState === 'loading' && <div className="state-panel loading-panel"><span className="loader" /><p>正在读取你的记录…</p></div>}
             {activityState === 'unauthenticated' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>需要登录</h3><p>只有服务端确认的成员身份才能查看本人记录。</p><a className="primary-button" href="/auth/login">登录 Sharework</a></div>}
@@ -598,14 +618,42 @@ function App() {
           </section>
         ) : (
           <section className="workspace-section admin-workspace">
-            <div className="section-heading"><div><p className="eyebrow">ADMIN DESK</p><h1>管理工作台</h1><p className="lede">维护设备台账、处理生命周期状态，并查看必要的责任审计。</p></div><button className="refresh-button" type="button" onClick={loadAdmin} disabled={adminState === 'loading'}>↻ 刷新工作台</button></div>
+            <div className="section-heading"><div><h1>管理工作台</h1><p className="lede">登记设备、维护生命周期状态、管理成员角色，并查看责任审计。</p></div><button className="refresh-button" type="button" onClick={loadAdmin} disabled={adminState === 'loading'}>↻ 刷新</button></div>
             {adminState === 'loading' && <div className="state-panel loading-panel"><span className="loader" /><p>正在读取管理数据…</p></div>}
             {adminState === 'forbidden' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>没有管理权限</h3><p>管理员权限由服务端会话确认，不能通过前端切换。</p></div>}
             {adminState === 'error' && <div className="state-panel error-panel"><span className="state-icon">!</span><h3>工作台暂时无法打开</h3><p>{apiMessage(error)}</p><button className="primary-button" type="button" onClick={loadAdmin}>重新加载</button></div>}
             {adminState === 'ready' && <div className="admin-grid">
               <section className="record-section admin-form"><div className="record-heading"><h2>登记设备</h2><span>新</span></div><div className="form-grid"><label>设备名称<input value={newDeviceName} onChange={(event) => setNewDeviceName(event.target.value)} placeholder="例如：Sony A7 IV" /></label><label>类别<input value={newDeviceCategory} onChange={(event) => setNewDeviceCategory(event.target.value)} placeholder="相机 / 音频 / 灯光" /></label><label>序列号（可选）<input value={newDeviceSerial} onChange={(event) => setNewDeviceSerial(event.target.value)} /></label></div><button className="primary-button" type="button" onClick={handleCreateDevice} disabled={!newDeviceName.trim() || Boolean(actionBusy)}>登记设备</button>{feedback?.area === 'admin-form' && <p className={`form-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}</section>
               <section className="record-section"><div className="record-heading"><h2>设备台账</h2><span>{devices.length}</span></div>{feedback?.area === 'admin-ledger' && <p className={`form-feedback ledger-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}<div className="admin-device-list">{devices.length === 0 ? <p className="record-empty">暂无设备。</p> : devices.map((device) => <article className="admin-device-row" key={device.id}><div><strong>{device.name}</strong><small>{device.assetNumber} · {device.category || '未分类'}</small></div><span className={`record-status ${deviceStatusTone[device.status]}`}>{deviceStatusLabel[device.status]}</span><select value={editDeviceId === device.id ? deviceStatus : device.status} disabled={device.allowedTransitions.length === 0} onChange={(event) => { setEditDeviceId(device.id); setDeviceStatus(event.target.value as DeviceStatus); setDeviceReason('') }} aria-label={`${device.name}状态`}>{transitionChoices(device).map((status) => <option key={status} value={status}>{deviceStatusLabel[status]}</option>)}</select>{editDeviceId === device.id && deviceStatus !== device.status && <div className="admin-change"><input value={deviceReason} onChange={(event) => setDeviceReason(event.target.value)} placeholder="状态变更原因（必填）" /><button className="small-action" type="button" onClick={() => requestStatusUpdate(device)} disabled={!deviceReason.trim() || Boolean(actionBusy)}>保存</button></div>}</article>)}</div></section>
-              <section className="record-section"><div className="record-heading"><h2>成员</h2><span>{adminMembers.length}</span></div><div className="member-list">{adminMembers.map((adminMember) => <div className="member-row" key={adminMember.id}><span>{adminMember.displayName}</span><small>{adminMember.role === 'admin' ? '管理员' : '成员'} · {adminMember.status === 'active' ? '启用' : '停用'}</small></div>)}</div></section>
+              <section className="record-section"><div className="record-heading"><h2>成员</h2><span>{adminMembers.length}</span></div>{feedback?.area === 'admin-members' && <p className={`form-feedback ledger-feedback ${feedback.tone}`} role="status">{feedback.text}</p>}<div className="member-list">{adminMembers.map((adminMember) => {
+                const isSelf = member?.id === adminMember.id
+                const editing = memberAction?.target.id === adminMember.id
+                return (
+                  <div className="member-row" key={adminMember.id}>
+                    <div className="member-row-info">
+                      <span>{adminMember.displayName}{isSelf && <em className="self-tag">（我）</em>}</span>
+                      <small>{adminMember.role === 'admin' ? '管理员' : '成员'} · {adminMember.status === 'active' ? '启用' : '已停用'}</small>
+                    </div>
+                    {!isSelf && !editing && (
+                      <div className="member-row-actions">
+                        {adminMember.role === 'member'
+                          ? <button className="small-action" type="button" onClick={() => { setMemberAction({ target: adminMember, change: { role: 'admin' }, label: `将 ${adminMember.displayName} 设为管理员` }); setMemberReason('') }} disabled={Boolean(actionBusy)}>设为管理员</button>
+                          : <button className="small-action" type="button" onClick={() => { setMemberAction({ target: adminMember, change: { role: 'member' }, label: `取消 ${adminMember.displayName} 的管理员` }); setMemberReason('') }} disabled={Boolean(actionBusy)}>取消管理员</button>}
+                        {adminMember.status === 'active'
+                          ? <button className="small-action danger" type="button" onClick={() => { setMemberAction({ target: adminMember, change: { status: 'inactive' }, label: `停用 ${adminMember.displayName}` }); setMemberReason('') }} disabled={Boolean(actionBusy)}>停用</button>
+                          : <button className="small-action" type="button" onClick={() => { setMemberAction({ target: adminMember, change: { status: 'active' }, label: `启用 ${adminMember.displayName}` }); setMemberReason('') }} disabled={Boolean(actionBusy)}>启用</button>}
+                      </div>
+                    )}
+                    {editing && (
+                      <div className="admin-change">
+                        <input value={memberReason} onChange={(event) => setMemberReason(event.target.value)} placeholder={`${memberAction.label}：原因（必填）`} aria-label="成员变更原因" />
+                        <button className="small-action" type="button" onClick={handleUpdateMember} disabled={!memberReason.trim() || Boolean(actionBusy)}>保存</button>
+                        <button className="small-action muted-action" type="button" onClick={() => { setMemberAction(null); setMemberReason('') }} disabled={Boolean(actionBusy)}>取消</button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}</div></section>
               <section className="record-section audit-section"><div className="record-heading"><h2>最近审计</h2><span>{auditEntries.length}</span></div>{auditEntries.length === 0 ? <p className="record-empty">暂无审计记录。</p> : <div className="audit-list">{auditEntries.slice(0, 20).map((entry) => <div className="audit-row" key={entry.id}><div><strong>{entry.action}</strong><small>{entry.entityType} · {entry.entityId.slice(0, 12)}</small></div><span className={`record-status ${entry.result === 'success' ? 'positive' : 'warning'}`}>{entry.result === 'success' ? '成功' : entry.result === 'denied' ? '拒绝' : '失败'}</span><time>{formatDate(entry.occurredAt)}</time></div>)}</div>}</section>
             </div>}
           </section>
@@ -638,7 +686,7 @@ function App() {
           </div>
         </div>
       )}
-      <footer className="footer"><span>SHAREWORK / STUDIO RESOURCE SYSTEM</span><span>单工作室 · 实物设备 MVP</span></footer>
+      <footer className="footer"><span>Sharework · 工作室物资共享</span><span>设备状态由服务端实时计算</span></footer>
     </div>
   )
 }

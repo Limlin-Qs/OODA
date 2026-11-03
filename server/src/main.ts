@@ -7,9 +7,14 @@ const pool = process.env.DATABASE_URL
   ? new Pool({ connectionString: process.env.DATABASE_URL })
   : undefined
 const oidcConfig = readOidcConfig(process.env)
+const bootstrapAdminSubjects = (process.env.BOOTSTRAP_ADMIN_SUBJECTS ?? '')
+  .split(',')
+  .map((subject) => subject.trim())
+  .filter((subject) => subject.length > 0)
 const app = buildApp({
   pool,
   oidc: oidcConfig ? new OidcClient(oidcConfig) : undefined,
+  bootstrapAdminSubjects,
 })
 const port = Number(process.env.PORT ?? '4016')
 const host = process.env.HOST ?? '127.0.0.1'

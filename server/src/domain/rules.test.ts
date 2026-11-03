@@ -109,6 +109,9 @@ describe('permission matrix', () => {
     expect(() => assertCanPerform('change_device_status', member)).toThrow(
       DomainRuleError,
     )
+    expect(() => assertCanPerform('manage_member', member)).toThrow(
+      DomainRuleError,
+    )
     expect(() =>
       assertCanPerform('return', { ...member, ownerId: 'member-2' }),
     ).toThrow(DomainRuleError)
@@ -118,6 +121,18 @@ describe('permission matrix', () => {
         responsibleMemberId: 'member-2',
       }),
     ).toThrow(DomainRuleError)
+  })
+
+  it('allows only active administrators to manage members', () => {
+    const admin = {
+      actorId: 'admin-1',
+      actorRole: 'admin' as const,
+      actorActive: true,
+    }
+    expect(() => assertCanPerform('manage_member', admin)).not.toThrow()
+    expect(() =>
+      assertCanPerform('manage_member', { ...admin, actorActive: false }),
+    ).toThrowError(/inactive member/i)
   })
 
   it('requires a reason for delegated administrator actions', () => {

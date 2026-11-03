@@ -5,7 +5,7 @@ test('authenticated member can borrow, return and reserve through the real UI', 
   await page.context().addCookies([{
     name: 'sharework_session',
     value: process.env.E2E_SESSION_TOKEN ?? '',
-    url: 'http://127.0.0.1:4116',
+    url: 'http://127.0.0.1:5173',
     httpOnly: true,
     sameSite: 'Lax',
   }])

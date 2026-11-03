@@ -213,6 +213,17 @@ export function listAdminMembers(): Promise<Member[]> {
   return requestJson<Member[]>('/api/admin/members')
 }
 
+export function updateMember(
+  id: string,
+  input: { role?: Member['role']; status?: Member['status']; reason: string },
+): Promise<Member> {
+  return requestJson<Member>(`/api/admin/members/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  })
+}
+
 export function listAudit(): Promise<AuditEntry[]> {
   return requestJson<AuditEntry[]>('/api/admin/audit')
 }

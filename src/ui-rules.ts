@@ -328,6 +328,9 @@ const codeMessages: Record<string, string> = {
   invalid_reservation_request: '预约请求不完整，请检查填写内容。',
   invalid_device: '设备信息不合法，请刷新后重试。',
   invalid_device_status: '设备状态不合法，请刷新后重试。',
+  invalid_member_update: '成员变更内容不合法，请刷新后重试。',
+  cannot_manage_self: '不能修改自己的角色或状态，请由另一位管理员操作。',
+  last_active_admin: '至少需要保留一名启用状态的管理员，操作已拒绝。',
   configuration_required: '服务端运行配置尚未完成，请联系管理员。',
   request_failed: '操作未完成，请稍后重试。',
 }

@@ -111,6 +111,7 @@ export type Command =
   | 'cancel_reservation'
   | 'change_device_status'
   | 'view_audit'
+  | 'manage_member'
 
 export interface PermissionContext {
   actorId: string
@@ -152,7 +153,11 @@ export function assertCanPerform(
     return
   }
 
-  if (command === 'change_device_status' || command === 'view_audit') {
+  if (
+    command === 'change_device_status' ||
+    command === 'view_audit' ||
+    command === 'manage_member'
+  ) {
     throw new DomainRuleError(
       'forbidden',
       'This command requires administrator permission.',

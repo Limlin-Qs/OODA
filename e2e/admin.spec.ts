@@ -5,7 +5,7 @@ test('administrator can register a device and change lifecycle with a reason', a
   await page.context().addCookies([{
     name: 'sharework_session',
     value: process.env.E2E_ADMIN_SESSION_TOKEN ?? '',
-    url: 'http://127.0.0.1:4116',
+    url: 'http://127.0.0.1:5173',
     httpOnly: true,
     sameSite: 'Lax',
   }])
@@ -35,4 +35,21 @@ test('administrator can register a device and change lifecycle with a reason', a
   await expect(archiveDialog).toContainText('归档')
   await archiveDialog.getByRole('button', { name: '确认归档' }).click()
   await expect(page.getByRole('status')).toContainText('设备状态已更新')
+
+  // 成员管理：提升角色与停用，均需填写原因
+  const targetName = process.env.E2E_TARGET_MEMBER ?? 'E2E Target'
+  const memberRow = page.locator('.member-row').filter({ hasText: targetName })
+  await expect(memberRow).toBeVisible()
+
+  await memberRow.getByRole('button', { name: '设为管理员' }).click()
+  await memberRow.getByLabel('成员变更原因').fill('E2E 值班管理员授权')
+  await memberRow.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByRole('status')).toContainText('设为管理员')
+  await expect(memberRow).toContainText('管理员')
+
+  await memberRow.getByRole('button', { name: '停用' }).click()
+  await memberRow.getByLabel('成员变更原因').fill('E2E 离组停用')
+  await memberRow.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByRole('status')).toContainText('停用')
+  await expect(memberRow).toContainText('已停用')
 })

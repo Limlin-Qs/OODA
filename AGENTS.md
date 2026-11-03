@@ -15,7 +15,7 @@
 | 服务端 | Fastify 5 + TypeScript 模块化单体（`server/src/`：app、auth、domain、devices、borrows、reservations、audit、notifications）；`/healthz`；进程内逾期提醒 worker（60 秒周期，`FOR UPDATE SKIP LOCKED` 认领） |
 | 数据 | PostgreSQL + `server/migrations/` 版本化 SQL（0000–0007）：外键、CHECK、唯一索引、预约区间 GiST 排斥约束、审计只追加触发器、幂等键表；`npm run migrate` 使用版本表 + advisory lock，可重复执行 |
 | 身份 | 组织 OIDC（jose，授权码流程 + 登录状态表）+ HttpOnly 会话（不透明令牌，仅存 SHA-256 哈希，`SameSite=Lax`，生产加 `Secure`）；角色仅 `admin`/`member`；授权全部在服务端 |
-| 测试 | Vitest 单测 37 项（含前端 ui-rules 17 项）、真实 PostgreSQL 集成测试 26 项（2026-10-13 复跑通过）；Playwright E2E 3 项（2026-09-14 通过；2026-10-13 复跑因配置漂移 3/3 失败，见 §11；spec 已适配 P1-012 确认对话框） |
+| 测试 | Vitest 单测 38 项（含前端 ui-rules 17 项、manage_member 权限规则）、真实 PostgreSQL 集成测试 26 项（2026-10-13 复跑通过）+ 成员管理/管理员引导新增 11 项（2026-11-03 编写，因测试集群在本机代理环境无法启动尚未复跑，见 §11）；Playwright E2E 3 项（2026-09-14 通过；2026-10-13 复跑因配置漂移 3/3 失败；2026-11-03 端口约定已统一修复，待复跑确认） |
 | 构建 | `npm run build` = `tsc -b && vite build`；`npm run build:server`；`npm run lint` = `eslint .`（2026-10-13 通过） |
 | 交付 | `ops/Dockerfile`、`ops/backup.sh`、`ops/restore.sh`、`ops/recovery-rehearsal.sh`、`docs/operations/release-recovery.md`；`.env.example` 无秘密；无 CI/CD |
 | Git | 已初始化（master）；提交由用户主导，代理不得自行提交、推送或改写历史 |
@@ -90,7 +90,7 @@
 - 鉴权与授权必须在服务端执行，前端隐藏按钮不构成权限控制；默认拒绝未明确允许的操作。
 - 管理员也不能绕过状态机、审计和数据完整性约束。
 - 已实现事实：OIDC 登录自动建档成员（默认 `member`/`active`）、会话校验、`assertActiveMember`/`assertAdmin` 检查、停用成员拒绝新操作（`inactive_member`）。
-- 待确认现状：**应用内没有角色授予、成员停用或成员管理写接口**。目前 `admin` 角色和 `inactive` 状态只能通过直接数据库操作设置（E2E 脚本就是这样做的）；首个管理员如何引导是待确认的运维问题。在补齐之前，不得把“成员状态管理”写成已实现的应用能力。
+- 2026-11-03 新增（代码已落地，数据库验证待复跑）：应用内成员管理——管理员可通过 `PATCH /api/admin/members/:id` 授予/取消角色、停用/启用成员，原因必填、禁止操作自己、保留至少一名启用管理员，变更写入审计；管理员引导通过环境变量 `BOOTSTRAP_ADMIN_SUBJECTS`（OIDC subject 列表）实现，命中身份在登录时提升为管理员并写入 `member.bootstrap_admin` 审计。复跑通过前不得当作已验证能力。
 
 ## 7. 数据可见性、隐私与配置边界
 
@@ -132,7 +132,7 @@
 - 单测 `npm test`：状态机、区间边界、超期判定、权限、会话，以及前端展示规则（占用徽标、时间校验、占用时间轴、错误码文案，`src/ui-rules.ts`）——纯内存，不依赖数据库。
 - 集成 `TEST_DATABASE_URL=<隔离库连接串> npm run test:integration`：必须连接真实 PostgreSQL（本机可用 `.test-postgres` 本地集群 + 独立库），覆盖事务回滚、并发争用、唯一/引用约束、幂等重放、审计不可变、提醒去重/重试、越权拒绝。并发测试禁止用内存替身。
 - E2E `TEST_DATABASE_URL=<隔离库连接串> npm run test:e2e`：借出—归还、预约、管理员生命周期的真实 UI 流程。
-- **当前已知问题（2026-10-13 取证）**：E2E 启动器 `e2e/run.mjs`（API 端口 3101、`vite preview` 端口 5173、cookie 域 5173）与 `playwright.config.ts`（baseURL 4116）、`vite.config.ts`（dev 端口 4116、代理目标 4016）端口约定不一致，3 项 E2E 全部以 `ERR_CONNECTION_REFUSED @ 127.0.0.1:4116` 失败。TASKS/PRD 中“E2E 通过”指 2026-09-14 的历史证据；修复方案需用户确认后执行，修复并复跑通过前不得把 E2E 写成当前可复现能力。
+- **端口约定（2026-11-03 已统一，待复跑确认）**：本地开发 vite dev 4116 → API 4016；E2E 为 vite preview 5173（`preview.proxy` 转发）→ API 3101；`playwright.config.ts` baseURL 5173；E2E spec cookie 域 5173。覆盖开关：`SHAREWORK_DEV_API_ORIGIN` / `SHAREWORK_E2E_API_ORIGIN`。此前“E2E 通过”指 2026-09-14 的历史证据；端口修复后 E2E 尚未复跑（2026-11-03 本机代理环境无法启动 `.test-postgres` 集群，postgres 后端进程报 0xC0000142），复跑通过前不得把 E2E 写成当前可复现能力。
 - 修复缺陷时补回归测试；涉及业务规则的变更没有测试不视为完成。不虚构覆盖率数字。
 
 **迁移纪律**：
@@ -154,8 +154,8 @@
 
 ## 13. 待确认问题（需要用户决策）
 
-1. E2E 端口配置漂移的修复方案（统一到哪套端口约定）确认后修复并复跑，恢复 E2E 证据。
-2. 管理员引导与成员停用：补应用内成员管理能力，还是把数据库级操作写成受控运维手册。
+1. ~~E2E 端口配置漂移~~ 已于 2026-11-03 统一修复（见 §11），待测试库可用后复跑确认并恢复 E2E 证据。
+2. ~~管理员引导与成员停用~~ 已于 2026-11-03 实现应用内成员管理（`PATCH /api/admin/members/:id` + `BOOTSTRAP_ADMIN_SUBJECTS` 引导），集成/E2E 验证待复跑。
 3. 预约 `completed` 状态：定义触发语义（到期自动完成、与借用联动或管理员处理），或明确标注不实现。
 4. 幂等键保留期与清理策略（当前永久保留）。
 5. 审计与个人信息的保留、匿名化与法定删除规则（PRD §5 已标注待处理）。

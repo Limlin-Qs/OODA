@@ -22,6 +22,7 @@ import {
 } from './auth/store.js'
 import { assertCanPerform, DomainRuleError, type DeviceStatus } from './domain/rules.js'
 import { appendAudit, listAuditEntries } from './audit/store.js'
+import { MemberError, updateMember, type MemberUpdate } from './members/store.js'
 import {
   BorrowError,
   borrowDevice,
@@ -52,6 +53,7 @@ export interface AppDependencies {
   pool?: Pool
   oidc?: OidcClient
   sessionTtlSeconds?: number
+  bootstrapAdminSubjects?: readonly string[]
 }
 
 function secureCookies(): boolean {
@@ -107,6 +109,15 @@ export function buildApp(dependencies: AppDependencies = {}): FastifyInstance {
             : error.code === 'invalid_interval'
               ? 400
               : 409
+      return reply.code(statusCode).send({ error: error.code })
+    }
+    if (error instanceof MemberError) {
+      const statusCode =
+        error.code === 'not_found'
+          ? 404
+          : error.code === 'missing_reason' || error.code === 'invalid_member_update'
+            ? 400
+            : 409
       return reply.code(statusCode).send({ error: error.code })
     }
     if (
@@ -172,7 +183,11 @@ export function buildApp(dependencies: AppDependencies = {}): FastifyInstance {
     const token = createOpaqueToken()
     const expiresAt = new Date(Date.now() + sessionTtlSeconds * 1000)
     await withTransaction(dependencies.pool, async (client) => {
-      const member = await ensureMemberForIdentity(client, identity)
+      const member = await ensureMemberForIdentity(
+        client,
+        identity,
+        dependencies.bootstrapAdminSubjects ?? [],
+      )
       await createSession(client, member.id, hashOpaqueToken(token), expiresAt)
     })
 
@@ -231,6 +246,28 @@ export function buildApp(dependencies: AppDependencies = {}): FastifyInstance {
        FROM members ORDER BY display_name, id`,
     )
     return result.rows
+  })
+
+  app.patch<{
+    Params: { id: string }
+    Body: MemberUpdate & { reason?: string }
+  }>('/api/admin/members/:id', async (request, reply) => {
+    if (!dependencies.pool) {
+      return unavailable(reply, 'Database configuration is required.')
+    }
+    const member = await currentMember(request, dependencies.pool)
+    assertAdmin(member)
+    const body = request.body ?? {}
+    const updated = await withTransaction(dependencies.pool, (client) =>
+      updateMember(
+        client,
+        member,
+        request.params.id,
+        { role: body.role, status: body.status },
+        body.reason?.trim() ?? '',
+      ),
+    )
+    return updated
   })
 
   app.get('/api/admin/audit', async (request, reply) => {

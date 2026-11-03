@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Pool, PoolClient } from 'pg'
+import { appendAudit } from '../audit/store.js'
 import type { LoginRequest, OidcIdentity } from './oidc.js'
 import type { Member } from './membership.js'
 
@@ -61,9 +62,34 @@ export async function findMemberByIdentitySubject(
 export async function ensureMemberForIdentity(
   client: PoolClient,
   identity: OidcIdentity,
+  bootstrapAdminSubjects: readonly string[] = [],
 ): Promise<Member> {
+  const bootstrapAdmin = bootstrapAdminSubjects.includes(identity.subject)
   const existing = await findMemberByIdentitySubject(client, identity.subject)
   if (existing) {
+    // 引导管理员：已建档成员命中 BOOTSTRAP_ADMIN_SUBJECTS 时在登录时提升为管理员，
+    // 用于恢复“没有任何可用管理员”的状态；提升写入审计，可追溯。
+    if (bootstrapAdmin && existing.role !== 'admin') {
+      const promoted = await client.query<MemberRow>(
+        `UPDATE members
+         SET display_name = $2, role = 'admin', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1
+         RETURNING id, identity_subject, display_name, role, status`,
+        [existing.id, identity.displayName],
+      )
+      await appendAudit(client, {
+        entityType: 'member',
+        entityId: existing.id,
+        action: 'member.bootstrap_admin',
+        actorMemberId: existing.id,
+        subjectMemberId: existing.id,
+        reason: 'bootstrap_admin_subjects',
+        beforeState: { role: existing.role },
+        afterState: { role: 'admin' },
+        result: 'success',
+      })
+      return toMember(promoted.rows[0])
+    }
     const result = await client.query<MemberRow>(
       `UPDATE members
        SET display_name = $2, updated_at = CURRENT_TIMESTAMP
@@ -76,9 +102,14 @@ export async function ensureMemberForIdentity(
 
   const result = await client.query<MemberRow>(
     `INSERT INTO members (id, identity_subject, display_name, role, status)
-     VALUES ($1, $2, $3, 'member', 'active')
+     VALUES ($1, $2, $3, $4, 'active')
      RETURNING id, identity_subject, display_name, role, status`,
-    [`member_${randomUUID()}`, identity.subject, identity.displayName],
+    [
+      `member_${randomUUID()}`,
+      identity.subject,
+      identity.displayName,
+      bootstrapAdmin ? 'admin' : 'member',
+    ],
   )
   return toMember(result.rows[0])
 }
